@@ -17,7 +17,7 @@ JELLYFIN_USER_ID = os.getenv('JELLYFIN_USER_ID', 'YOUR_ADMIN_ID')
 DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_LABEL = os.getenv('TARGET_LABEL', 'LauraTV')
 
-# --- NEW: SECURITY CREDENTIALS ---
+# --- SECURITY CREDENTIALS ---
 APP_USERNAME = os.getenv('APP_USERNAME', 'admin')
 APP_PASSWORD = os.getenv('APP_PASSWORD', 'password123')
 # -------------------------------------
@@ -44,6 +44,9 @@ def requires_auth(f):
 
 # --- DATABASE FUNCTIONS ---
 def get_db_file(label):
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        
     safe_label = "".join(c for c in label if c.isalnum())
     if not safe_label:
         safe_label = "default"
@@ -128,7 +131,8 @@ HTML_PAGE = """
 
     <div class="label-bar">
         <span><strong>Active Label:</strong></span>
-        <input type="text" id="globalLabel" value="{{ default_label }}">
+        <input type="text" id="globalLabel" value="{{ default_label }}" list="knownLabelsList" placeholder="Select or type a label..." autocomplete="off">
+        <datalist id="knownLabelsList"></datalist>
         <button onclick="changeLabel()">Load Label Data</button>
     </div>
 
@@ -177,6 +181,22 @@ HTML_PAGE = """
         let activeTab = 'mapper'; 
         let hasLoaded = false; 
 
+        // Fetch known labels on page load
+        function loadKnownLabels() {
+            fetch('/api/known_labels')
+                .then(res => res.json())
+                .then(labels => {
+                    const dataList = document.getElementById('knownLabelsList');
+                    dataList.innerHTML = ''; // Clear old options
+                    labels.forEach(label => {
+                        let option = document.createElement('option');
+                        option.value = label;
+                        dataList.appendChild(option);
+                    });
+                })
+                .catch(err => console.error("Error loading known labels:", err));
+        }
+
         function getActiveLabel() {
             return document.getElementById('globalLabel').value.trim();
         }
@@ -196,6 +216,9 @@ HTML_PAGE = """
             } else {
                 loadDatabase();
             }
+            
+            // Refresh the datalist in case a new label was just created
+            loadKnownLabels();
         }
 
         function switchTab(tabId) {
@@ -440,6 +463,9 @@ HTML_PAGE = """
             statusDiv.innerHTML = `<span style="color:#4caf50">✅ Successfully tagged ${successCount} out of ${total} items!</span>`;
             setTimeout(() => deselectAllDB(), 1500);
         }
+
+        // Initialize the combobox on startup
+        document.addEventListener('DOMContentLoaded', loadKnownLabels);
     </script>
 </body>
 </html>
@@ -458,6 +484,25 @@ def get_jf_headers():
 @requires_auth
 def index():
     return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL)
+
+# NEW ROUTE: Find all existing databases
+@app.route('/api/known_labels')
+@requires_auth
+def get_known_labels():
+    labels = set()
+    if os.path.exists(DATA_DIR):
+        for filename in os.listdir(DATA_DIR):
+            if filename.endswith("_mapped_shows.json"):
+                # Strip the suffix to get the raw label name
+                label = filename.replace("_mapped_shows.json", "")
+                if label and label != "default":
+                    labels.add(label)
+                    
+    # Always include the default from docker-compose so the user has a starting point
+    labels.add(DEFAULT_LABEL)
+    
+    # Return them sorted alphabetically
+    return jsonify(sorted(list(labels)))
 
 @app.route('/api/plex_shows')
 @requires_auth
