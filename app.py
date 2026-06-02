@@ -13,33 +13,45 @@ JELLYFIN_URL = os.getenv('JELLYFIN_URL', 'http://192.168.2.202:8096')
 JELLYFIN_API_KEY = os.getenv('JELLYFIN_API_KEY', 'YOUR_JELLYFIN_KEY')
 JELLYFIN_USER_ID = os.getenv('JELLYFIN_USER_ID', 'YOUR_ADMIN_ID') 
 
-TARGET_LABEL = os.getenv('TARGET_LABEL', 'LauraTV') 
-DB_FILE = os.getenv('DB_FILE', '/data/mapped_shows.json')
+# We now point to the data directory, not a specific file
+DATA_DIR = os.getenv('DATA_DIR', '/data')
+
+# We can keep a default fallback label if none is typed
+DEFAULT_LABEL = os.getenv('TARGET_LABEL', 'LauraTV')
 # -------------------------------------
 
 app = Flask(__name__)
 
-# --- DATABASE FUNCTIONS ---
-def load_mapped_shows():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r') as f:
+# --- DATABASE FUNCTIONS (Now Dynamic by Label!) ---
+def get_db_file(label):
+    """Generates a safe filename based on the provided label."""
+    # Strip any weird characters out of the label just in case
+    safe_label = "".join(c for c in label if c.isalnum())
+    if not safe_label:
+        safe_label = "default"
+    return os.path.join(DATA_DIR, f"{safe_label}_mapped_shows.json")
+
+def load_mapped_shows(label):
+    db_file = get_db_file(label)
+    if os.path.exists(db_file):
+        with open(db_file, 'r') as f:
             try:
                 return json.load(f)
             except:
                 return []
     return []
 
-def save_mapped_show(plex_id, jellyfin_id, title):
-    mapped = load_mapped_shows()
+def save_mapped_show(plex_id, jellyfin_id, title, label):
+    mapped = load_mapped_shows(label)
     if not any(str(m.get('plex_id')) == str(plex_id) for m in mapped):
         mapped.append({"plex_id": plex_id, "jellyfin_id": jellyfin_id, "title": title})
-        with open(DB_FILE, 'w') as f:
+        with open(get_db_file(label), 'w') as f:
             json.dump(mapped, f, indent=4)
 
-def remove_mapped_show(plex_id):
-    mapped = load_mapped_shows()
+def remove_mapped_show(plex_id, label):
+    mapped = load_mapped_shows(label)
     mapped = [m for m in mapped if str(m.get('plex_id')) != str(plex_id)]
-    with open(DB_FILE, 'w') as f:
+    with open(get_db_file(label), 'w') as f:
         json.dump(mapped, f, indent=4)
 
 # --- HTML & JAVASCRIPT FRONTEND ---
@@ -48,9 +60,16 @@ HTML_PAGE = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Plex to Jellyfin Mapper</title>
+    <title>Multi-Label Plex to Jellyfin Mapper</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+        
+        /* New Label Bar Styles */
+        .label-bar { display: flex; align-items: center; gap: 15px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #00a4dc; }
+        .label-bar input { padding: 10px; border-radius: 4px; border: none; background: #2c2c2c; color: #fff; font-size: 16px; font-weight: bold; width: 250px;}
+        .label-bar button { padding: 10px 20px; background: #00a4dc; color: #fff; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        .label-bar button:hover { background: #00bfff; }
+
         .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
         .tab-btn { background: #2c2c2c; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold; }
         .tab-btn.active { background: #e5a00d; color: #000; }
@@ -66,18 +85,18 @@ HTML_PAGE = """
         
         .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
         input[type="text"] { flex: 1; padding: 10px; border-radius: 4px; border: none; background: #2c2c2c; color: #fff; font-size: 16px; }
-        button { padding: 10px 20px; background: #e5a00d; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; }
-        button:hover { background: #ffb822; }
+        button.action-btn { padding: 10px 20px; background: #e5a00d; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        button.action-btn:hover { background: #ffb822; }
         
         .jf-result { display: flex; gap: 15px; background: #2c2c2c; padding: 15px; border-radius: 6px; margin-bottom: 10px; align-items: center; }
         .jf-result img { width: 50px; height: 75px; object-fit: cover; border-radius: 4px; background: #444; }
         .jf-info { flex: 1; }
-        .tag-btn { background: #00a4dc; color: #fff; }
+        .tag-btn { background: #00a4dc; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
         .tag-btn:hover { background: #00bfff; }
         
-        .del-btn { background: #d32f2f; color: #fff; }
+        .del-btn { background: #d32f2f; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
         .del-btn:hover { background: #f44336; }
-        .sort-btn { background: #444; color: #fff; }
+        .sort-btn { background: #444; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
         .sort-btn:hover { background: #555; }
         
         .success-msg { color: #4caf50; font-weight: bold; display: none; margin-bottom: 15px; }
@@ -90,6 +109,12 @@ HTML_PAGE = """
 </head>
 <body>
 
+    <div class="label-bar">
+        <span><strong>Active Label:</strong></span>
+        <input type="text" id="globalLabel" value="{{ default_label }}">
+        <button onclick="changeLabel()">Load Label Data</button>
+    </div>
+
     <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('mapper')" id="tab-mapper">1. Match New Shows</button>
         <button class="tab-btn" onclick="switchTab('database')" id="tab-database">2. Saved Database & Re-Apply</button>
@@ -98,14 +123,14 @@ HTML_PAGE = """
     <div id="mapper" class="tab-content active">
         <div class="column">
             <h2>Select Plex Show</h2>
-            <p>Pending shows with label: <strong>{{ label }}</strong></p>
+            <p>Pending shows in Plex with label: <strong id="displayLabel">{{ default_label }}</strong></p>
             <div class="list-container" id="plexList">Loading...</div>
         </div>
         <div class="column">
             <h2>Match in Jellyfin</h2>
             <div class="search-box">
                 <input type="text" id="jfSearch" placeholder="Search Jellyfin...">
-                <button onclick="searchJellyfin()">Search</button>
+                <button class="action-btn" onclick="searchJellyfin()">Search</button>
             </div>
             <div class="success-msg" id="successMsg">✨ Tag applied and saved to database!</div>
             <div class="list-container" id="jfList">Select a Plex show first.</div>
@@ -114,8 +139,8 @@ HTML_PAGE = """
 
     <div id="database" class="tab-content" style="flex-direction: column;">
         <div class="db-toolbar">
-            <button onclick="selectAllDB()">Select All</button>
-            <button onclick="deselectAllDB()">Deselect All</button>
+            <button class="action-btn" onclick="selectAllDB()">Select All</button>
+            <button class="action-btn" onclick="deselectAllDB()">Deselect All</button>
             <button class="tag-btn" onclick="reapplySelected()">Re-Apply Tags to Selected</button>
             <button id="sortBtn" class="sort-btn" onclick="toggleSort()">Sort: A-Z ↓</button>
             <div class="db-status" id="dbStatus"></div>
@@ -128,9 +153,32 @@ HTML_PAGE = """
     <script>
         let currentPlexShow = null;
         let cachedDbData = [];
-        let dbSortOrder = 'asc'; // Ascending by default
+        let dbSortOrder = 'asc'; 
+        let activeTab = 'mapper'; // track state so changing labels refreshes the right screen
+
+        function getActiveLabel() {
+            return document.getElementById('globalLabel').value.trim();
+        }
+
+        function changeLabel() {
+            let label = getActiveLabel();
+            if(!label) return alert("Label cannot be empty!");
+            
+            document.getElementById('displayLabel').innerText = label;
+            document.getElementById('successMsg').style.display = 'none';
+            document.getElementById('jfList').innerHTML = 'Select a Plex show first.';
+            currentPlexShow = null;
+
+            // Reload whatever tab is currently open using the new label
+            if (activeTab === 'mapper') {
+                loadPlexShows();
+            } else {
+                loadDatabase();
+            }
+        }
 
         function switchTab(tabId) {
+            activeTab = tabId;
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
@@ -141,13 +189,14 @@ HTML_PAGE = """
         }
 
         function loadPlexShows() {
-            fetch('/api/plex_shows')
+            let label = getActiveLabel();
+            fetch(`/api/plex_shows?label=${encodeURIComponent(label)}`)
                 .then(res => res.json())
                 .then(data => {
                     const list = document.getElementById('plexList');
                     list.innerHTML = '';
                     if(data.error) { list.innerHTML = `<p style="color:red">${data.error}</p>`; return; }
-                    if(data.length === 0) { list.innerHTML = '<p style="color:#4caf50">🎉 All caught up! No pending shows.</p>'; return; }
+                    if(data.length === 0) { list.innerHTML = '<p style="color:#4caf50">🎉 All caught up! No pending shows for this label.</p>'; return; }
                     
                     data.forEach(show => {
                         const div = document.createElement('div');
@@ -202,11 +251,17 @@ HTML_PAGE = """
 
         function applyTag(jellyfinId) {
             if(!currentPlexShow) return alert("Select a Plex show first!");
+            let label = getActiveLabel();
             
             fetch('/api/apply_tag', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jellyfin_id: jellyfinId, plex_id: currentPlexShow.id, title: currentPlexShow.title })
+                body: JSON.stringify({ 
+                    jellyfin_id: jellyfinId, 
+                    plex_id: currentPlexShow.id, 
+                    title: currentPlexShow.title,
+                    label: label
+                })
             })
             .then(res => res.json())
             .then(data => {
@@ -222,26 +277,26 @@ HTML_PAGE = """
         }
 
         function loadDatabase() {
-            fetch('/api/saved_matches?nocache=' + new Date().getTime())
+            let label = getActiveLabel();
+            fetch(`/api/saved_matches?label=${encodeURIComponent(label)}&nocache=${new Date().getTime()}`)
                 .then(res => res.json())
                 .then(data => {
-                    cachedDbData = data; // Save to our local variable
-                    renderDatabase();    // Sort and render it
+                    cachedDbData = data; 
+                    renderDatabase();    
                 });
         }
 
         function toggleSort() {
             dbSortOrder = (dbSortOrder === 'asc') ? 'desc' : 'asc';
             document.getElementById('sortBtn').innerText = (dbSortOrder === 'asc') ? 'Sort: A-Z ↓' : 'Sort: Z-A ↑';
-            renderDatabase(); // Re-render instantly!
+            renderDatabase(); 
         }
 
         function renderDatabase() {
             const list = document.getElementById('dbList');
             list.innerHTML = '';
-            if(cachedDbData.length === 0) { list.innerHTML = '<p>No saved shows yet.</p>'; return; }
+            if(cachedDbData.length === 0) { list.innerHTML = `<p>No saved shows yet for ${getActiveLabel()}.</p>`; return; }
             
-            // 1. Sort the data array based on the title
             let sortedData = [...cachedDbData].sort((a, b) => {
                 let titleA = (a.title || `Unknown Title (Plex ID: ${a.plex_id})`).toLowerCase();
                 let titleB = (b.title || `Unknown Title (Plex ID: ${b.plex_id})`).toLowerCase();
@@ -251,7 +306,6 @@ HTML_PAGE = """
                 return 0;
             });
 
-            // 2. Build the HTML list
             sortedData.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'db-item';
@@ -276,12 +330,13 @@ HTML_PAGE = """
             buttonElement.innerText = "Deleting...";
             buttonElement.style.background = "#555";
             buttonElement.disabled = true;
+            let label = getActiveLabel();
             
             try {
                 const response = await fetch('/api/delete_match', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ plex_id: plexId, jellyfin_id: jellyfinId })
+                    body: JSON.stringify({ plex_id: plexId, jellyfin_id: jellyfinId, label: label })
                 });
                 const result = await response.json();
                 
@@ -314,6 +369,7 @@ HTML_PAGE = """
             
             const jellyfinIds = Array.from(checkboxes).map(cb => cb.value);
             const statusDiv = document.getElementById('dbStatus');
+            let label = getActiveLabel();
             
             statusDiv.innerText = `Re-applying tags to ${jellyfinIds.length} items...`;
             
@@ -321,7 +377,7 @@ HTML_PAGE = """
                 const response = await fetch('/api/reapply_batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ jellyfin_ids: jellyfinIds })
+                    body: JSON.stringify({ jellyfin_ids: jellyfinIds, label: label })
                 });
                 const result = await response.json();
                 
@@ -336,7 +392,7 @@ HTML_PAGE = """
             }
         }
 
-        // Initialize
+        // Initialize using the default label on page load
         loadPlexShows();
     </script>
 </body>
@@ -354,18 +410,22 @@ def get_jf_headers():
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_PAGE, label=TARGET_LABEL)
+    return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL)
 
 @app.route('/api/plex_shows')
 def get_plex_shows():
+    label = request.args.get('label')
+    if not label: return jsonify({"error": "No label provided"}), 400
+
     try:
-        mapped_shows = load_mapped_shows()
+        mapped_shows = load_mapped_shows(label)
         mapped_plex_ids = [str(m['plex_id']) for m in mapped_shows]
 
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
         library = plex.library.section(PLEX_LIBRARY_NAME)
         
-        shows = [s for s in library.all() if TARGET_LABEL in [l.tag for l in s.labels] and str(s.ratingKey) not in mapped_plex_ids]
+        # We now search Plex specifically for the label passed from the browser
+        shows = [s for s in library.all() if label in [l.tag for l in s.labels] and str(s.ratingKey) not in mapped_plex_ids]
         result = [{"id": str(s.ratingKey), "title": s.title, "year": s.year} for s in shows]
         return jsonify(result)
     except Exception as e:
@@ -403,9 +463,10 @@ def apply_tag():
     jellyfin_id = data.get('jellyfin_id')
     plex_id = data.get('plex_id')
     title = data.get('title', 'Unknown Title') 
+    label = data.get('label')
     
-    if not jellyfin_id or not plex_id:
-        return jsonify({"error": "Missing IDs"}), 400
+    if not jellyfin_id or not plex_id or not label:
+        return jsonify({"error": "Missing required data"}), 400
 
     detail_url = f"{JELLYFIN_URL}/Users/{JELLYFIN_USER_ID}/Items/{jellyfin_id}"
     headers = get_jf_headers()
@@ -417,18 +478,19 @@ def apply_tag():
         item_data = detail_res.json()
         current_tags = item_data.get('Tags', [])
 
-        if TARGET_LABEL not in current_tags:
-            current_tags.append(TARGET_LABEL)
+        # Add the dynamically provided label to Jellyfin
+        if label not in current_tags:
+            current_tags.append(label)
             item_data['Tags'] = current_tags
             
             update_res = requests.post(f"{JELLYFIN_URL}/Items/{jellyfin_id}", headers=headers, json=item_data)
             if update_res.status_code in [200, 204]:
-                save_mapped_show(plex_id, jellyfin_id, title)
+                save_mapped_show(plex_id, jellyfin_id, title, label)
                 return jsonify({"success": True})
             else:
                 return jsonify({"error": f"Rejected (Status {update_res.status_code})"}), 500
         else:
-            save_mapped_show(plex_id, jellyfin_id, title)
+            save_mapped_show(plex_id, jellyfin_id, title, label)
             return jsonify({"success": True, "message": "Already tagged"})
 
     except Exception as e:
@@ -436,11 +498,17 @@ def apply_tag():
 
 @app.route('/api/saved_matches')
 def saved_matches():
-    return jsonify(load_mapped_shows())
+    label = request.args.get('label')
+    if not label: return jsonify([])
+    return jsonify(load_mapped_shows(label))
 
 @app.route('/api/reapply_batch', methods=['POST'])
 def reapply_batch():
-    jellyfin_ids = request.json.get('jellyfin_ids', [])
+    data = request.json
+    jellyfin_ids = data.get('jellyfin_ids', [])
+    label = data.get('label')
+    if not label: return jsonify({"error": "Missing label"}), 400
+    
     headers = get_jf_headers()
     success_count = 0
     
@@ -453,8 +521,9 @@ def reapply_batch():
                 item_data = detail_res.json()
                 current_tags = item_data.get('Tags', [])
                 
-                if TARGET_LABEL not in current_tags:
-                    current_tags.append(TARGET_LABEL)
+                # Re-apply the specific label sent from the frontend
+                if label not in current_tags:
+                    current_tags.append(label)
                     item_data['Tags'] = current_tags
                     update_res = requests.post(f"{JELLYFIN_URL}/Items/{j_id}", headers=headers, json=item_data)
                     if update_res.status_code in [200, 204]:
@@ -472,9 +541,10 @@ def delete_match():
     data = request.json
     jellyfin_id = data.get('jellyfin_id')
     plex_id = data.get('plex_id')
+    label = data.get('label')
 
-    if not jellyfin_id or not plex_id:
-        return jsonify({"error": "Missing IDs"}), 400
+    if not jellyfin_id or not plex_id or not label:
+        return jsonify({"error": "Missing required data"}), 400
 
     headers = get_jf_headers()
 
@@ -486,15 +556,17 @@ def delete_match():
             item_data = detail_res.json()
             current_tags = item_data.get('Tags', [])
             
-            if TARGET_LABEL in current_tags:
-                current_tags.remove(TARGET_LABEL)
+            # Remove the specific label from Jellyfin
+            if label in current_tags:
+                current_tags.remove(label)
                 item_data['Tags'] = current_tags
                 
                 update_res = requests.post(f"{JELLYFIN_URL}/Items/{jellyfin_id}", headers=headers, json=item_data)
                 if update_res.status_code not in [200, 204]:
                     return jsonify({"error": f"Failed to untag in Jellyfin (Status {update_res.status_code})"}), 500
 
-        remove_mapped_show(plex_id)
+        # Remove from the specific label's JSON file
+        remove_mapped_show(plex_id, label)
         return jsonify({"success": True})
 
     except Exception as e:
