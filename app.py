@@ -1,7 +1,8 @@
 import requests
 import json
 import os
-from flask import Flask, jsonify, request, render_template_string
+from functools import wraps
+from flask import Flask, jsonify, request, render_template_string, Response
 from plexapi.server import PlexServer
 
 # --- CONFIGURATION (Docker Ready!) ---
@@ -13,18 +14,36 @@ JELLYFIN_URL = os.getenv('JELLYFIN_URL', 'http://192.168.2.202:8096')
 JELLYFIN_API_KEY = os.getenv('JELLYFIN_API_KEY', 'YOUR_JELLYFIN_KEY')
 JELLYFIN_USER_ID = os.getenv('JELLYFIN_USER_ID', 'YOUR_ADMIN_ID') 
 
-# We now point to the data directory, not a specific file
 DATA_DIR = os.getenv('DATA_DIR', '/data')
-
-# We can keep a default fallback label if none is typed
 DEFAULT_LABEL = os.getenv('TARGET_LABEL', 'LauraTV')
+
+# --- NEW: SECURITY CREDENTIALS ---
+APP_USERNAME = os.getenv('APP_USERNAME', 'admin')
+APP_PASSWORD = os.getenv('APP_PASSWORD', 'password123')
 # -------------------------------------
 
 app = Flask(__name__)
 
-# --- DATABASE FUNCTIONS (Now Dynamic by Label!) ---
+# --- AUTHENTICATION LOGIC ---
+def check_auth(username, password):
+    return username == APP_USERNAME and password == APP_PASSWORD
+
+def authenticate():
+    return Response(
+        'Authentication required to access the Mapper.\n', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+# --- DATABASE FUNCTIONS ---
 def get_db_file(label):
-    """Generates a safe filename based on the provided label."""
     safe_label = "".join(c for c in label if c.isalnum())
     if not safe_label:
         safe_label = "default"
@@ -107,7 +126,6 @@ HTML_PAGE = """
 </head>
 <body>
 
-    <!-- GLOBAL LABEL BAR -->
     <div class="label-bar">
         <span><strong>Active Label:</strong></span>
         <input type="text" id="globalLabel" value="{{ default_label }}">
@@ -119,7 +137,6 @@ HTML_PAGE = """
         <button class="tab-btn" onclick="switchTab('database')" id="tab-database">2. Saved Database & Re-Apply</button>
     </div>
 
-    <!-- TAB 1: THE MAPPER -->
     <div id="mapper" class="tab-content active">
         <div class="column">
             <h2>Select Plex Show</h2>
@@ -137,13 +154,15 @@ HTML_PAGE = """
         </div>
     </div>
 
-    <!-- TAB 2: THE DATABASE -->
     <div id="database" class="tab-content" style="flex-direction: column;">
         <div class="db-toolbar">
             <button class="action-btn" onclick="selectAllDB()">Select All</button>
             <button class="action-btn" onclick="deselectAllDB()">Deselect All</button>
-            <button class="tag-btn" onclick="reapplySelected()">Re-Apply Tags to Selected</button>
+            <button class="tag-btn" id="reapplyBtn" onclick="reapplySelected()">Re-Apply Tags to Selected</button>
             <button id="sortBtn" class="sort-btn" onclick="toggleSort()">Sort: A-Z ↓</button>
+            
+            <progress id="reapplyProgress" value="0" max="100" style="display: none; margin-left: auto; width: 150px; accent-color: #e5a00d;"></progress>
+            
             <div class="db-status" id="dbStatus"></div>
         </div>
         <div class="list-container" id="dbList" style="background: #1e1e1e; border-radius: 8px; padding: 20px;">
@@ -156,7 +175,7 @@ HTML_PAGE = """
         let cachedDbData = [];
         let dbSortOrder = 'asc'; 
         let activeTab = 'mapper'; 
-        let hasLoaded = false; // Prevents loading until the button is clicked!
+        let hasLoaded = false; 
 
         function getActiveLabel() {
             return document.getElementById('globalLabel').value.trim();
@@ -166,7 +185,7 @@ HTML_PAGE = """
             let label = getActiveLabel();
             if(!label) return alert("Label cannot be empty!");
             
-            hasLoaded = true; // Unlock the app!
+            hasLoaded = true; 
             document.getElementById('displayLabel').innerText = label;
             document.getElementById('successMsg').style.display = 'none';
             document.getElementById('jfList').innerHTML = 'Select a Plex show first.';
@@ -186,7 +205,6 @@ HTML_PAGE = """
             document.getElementById(tabId).classList.add('active');
             document.getElementById('tab-' + tabId).classList.add('active');
             
-            // Only try to load data if they have clicked the blue button at least once
             if (hasLoaded) {
                 if(tabId === 'database') loadDatabase();
                 if(tabId === 'mapper') loadPlexShows();
@@ -378,36 +396,56 @@ HTML_PAGE = """
             
             const jellyfinIds = Array.from(checkboxes).map(cb => cb.value);
             const statusDiv = document.getElementById('dbStatus');
+            const progressBar = document.getElementById('reapplyProgress');
+            const actionBtn = document.getElementById('reapplyBtn');
             let label = getActiveLabel();
             
-            statusDiv.innerText = `Re-applying tags to ${jellyfinIds.length} items...`;
+            let total = jellyfinIds.length;
+            let successCount = 0;
             
-            try {
-                const response = await fetch('/api/reapply_batch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ jellyfin_ids: jellyfinIds, label: label })
-                });
-                const result = await response.json();
+            actionBtn.disabled = true;
+            actionBtn.style.background = "#555";
+            actionBtn.innerText = "Applying...";
+            
+            progressBar.max = total;
+            progressBar.value = 0;
+            progressBar.style.display = "block";
+            statusDiv.style.marginLeft = "15px";
+            
+            for (let i = 0; i < total; i++) {
+                statusDiv.innerText = `Tagging: ${i + 1} / ${total}`;
+                progressBar.value = i + 1;
                 
-                if(result.success) {
-                    statusDiv.innerHTML = `<span style="color:#4caf50">✅ Successfully tagged ${result.count} items!</span>`;
-                    setTimeout(() => deselectAllDB(), 1000);
-                } else {
-                    statusDiv.innerHTML = `<span style="color:red">❌ Error: ${result.error}</span>`;
+                try {
+                    const response = await fetch('/api/reapply_batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ jellyfin_ids: [jellyfinIds[i]], label: label })
+                    });
+                    const result = await response.json();
+                    if(result.success) {
+                        successCount += result.count;
+                    }
+                } catch (err) {
+                    console.error("Failed to tag ID: " + jellyfinIds[i]);
                 }
-            } catch (err) {
-                statusDiv.innerText = "Connection error.";
             }
-        }
 
-        // NOTE: We completely removed the loadPlexShows() auto-trigger here!
+            progressBar.style.display = "none";
+            actionBtn.disabled = false;
+            actionBtn.style.background = "#00a4dc";
+            actionBtn.innerText = "Re-Apply Tags to Selected";
+            statusDiv.style.marginLeft = "auto";
+            
+            statusDiv.innerHTML = `<span style="color:#4caf50">✅ Successfully tagged ${successCount} out of ${total} items!</span>`;
+            setTimeout(() => deselectAllDB(), 1500);
+        }
     </script>
 </body>
 </html>
 """
 
-# --- BACKEND API ROUTES ---
+# --- BACKEND API ROUTES (LOCKED DOWN) ---
 
 def get_jf_headers():
     return {
@@ -417,10 +455,12 @@ def get_jf_headers():
     }
 
 @app.route('/')
+@requires_auth
 def index():
     return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL)
 
 @app.route('/api/plex_shows')
+@requires_auth
 def get_plex_shows():
     label = request.args.get('label')
     if not label: return jsonify({"error": "No label provided"}), 400
@@ -439,6 +479,7 @@ def get_plex_shows():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/search_jellyfin')
+@requires_auth
 def search_jellyfin():
     query = request.args.get('q', '')
     url = f"{JELLYFIN_URL}/Users/{JELLYFIN_USER_ID}/Items"
@@ -465,6 +506,7 @@ def search_jellyfin():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/apply_tag', methods=['POST'])
+@requires_auth
 def apply_tag():
     data = request.json
     jellyfin_id = data.get('jellyfin_id')
@@ -503,12 +545,14 @@ def apply_tag():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/saved_matches')
+@requires_auth
 def saved_matches():
     label = request.args.get('label')
     if not label: return jsonify([])
     return jsonify(load_mapped_shows(label))
 
 @app.route('/api/reapply_batch', methods=['POST'])
+@requires_auth
 def reapply_batch():
     data = request.json
     jellyfin_ids = data.get('jellyfin_ids', [])
@@ -542,6 +586,7 @@ def reapply_batch():
     return jsonify({"success": True, "count": success_count})
 
 @app.route('/api/delete_match', methods=['POST'])
+@requires_auth
 def delete_match():
     data = request.json
     jellyfin_id = data.get('jellyfin_id')
