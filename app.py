@@ -510,7 +510,7 @@ def get_jf_headers():
 def index():
     return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL)
 
-# LOOKS INTO THE DATA FLODER FOR JSON DATABASES
+# LOOKS INTO THE DATA FOLDER FOR JSON DATABASES
 @app.route('/api/known_labels')
 @requires_auth
 def get_known_labels():
@@ -538,7 +538,13 @@ def get_plex_shows():
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
         library = plex.library.section(PLEX_LIBRARY_NAME)
         
-        shows = [s for s in library.all() if label in [l.tag for l in s.labels] and str(s.ratingKey) not in mapped_plex_ids]
+        # --- THE SPEED FIX ---
+        # Instead of downloading the whole library, we ask Plex to filter it before sending!
+        matching_shows = library.search(label=label)
+        
+        # Now we just remove the ones we've already mapped
+        shows = [s for s in matching_shows if str(s.ratingKey) not in mapped_plex_ids]
+        
         result = [{"id": str(s.ratingKey), "title": s.title, "year": s.year} for s in shows]
         return jsonify(result)
     except Exception as e:
