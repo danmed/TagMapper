@@ -14,8 +14,8 @@ If you use Plex to manage specific labels (like "Kids", "Anime", or "LauraTV") a
 
 1. Clone this repository:
    ```bash
-   git clone [https://github.com/YOUR_USERNAME/plex-jellyfin-mapper.git](https://github.com/YOUR_USERNAME/plex-jellyfin-mapper.git)
-   cd plex-jellyfin-mapper
+   git clone https://github.com/danmed/TagMapper.git
+   cd TagMapper
 2. Create docker-compose.yml
    ```yaml
    services:
@@ -29,14 +29,17 @@ If you use Plex to manage specific labels (like "Kids", "Anime", or "LauraTV") a
     environment:
       - APP_USERNAME=admin
       - APP_PASSWORD=password123
-      - PLEX_URL=[http://192.168.2.203:32400](http://192.168.2.203:32400)
+      - PLEX_URL=http://192.168.2.203:32400
       - PLEX_TOKEN=your_plex_token_here
       - PLEX_LIBRARY_NAME=TV
-      - JELLYFIN_URL=[http://192.168.2.202:8096](http://192.168.2.202:8096)
+      - JELLYFIN_URL=http://192.168.2.202:8096
       - JELLYFIN_API_KEY=your_jellyfin_api_key_here
       - JELLYFIN_USER_ID=your_jellyfin_admin_user_id
       - TARGET_LABEL=LauraTV
     restart: unless-stopped
+3. Build Docker Container
+   ```bash
+   docker compose up -d --build
 
 ## Screenshots
 <img width="2306" height="888" alt="image" src="https://github.com/user-attachments/assets/56f566be-0e2e-4bd9-b038-e142e707e695" />
