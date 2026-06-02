@@ -38,7 +38,6 @@ def save_mapped_show(plex_id, jellyfin_id, title):
 
 def remove_mapped_show(plex_id):
     mapped = load_mapped_shows()
-    # Using str() to ensure numbers and text strings match perfectly
     mapped = [m for m in mapped if str(m.get('plex_id')) != str(plex_id)]
     with open(DB_FILE, 'w') as f:
         json.dump(mapped, f, indent=4)
@@ -78,6 +77,8 @@ HTML_PAGE = """
         
         .del-btn { background: #d32f2f; color: #fff; }
         .del-btn:hover { background: #f44336; }
+        .sort-btn { background: #444; color: #fff; }
+        .sort-btn:hover { background: #555; }
         
         .success-msg { color: #4caf50; font-weight: bold; display: none; margin-bottom: 15px; }
 
@@ -116,6 +117,7 @@ HTML_PAGE = """
             <button onclick="selectAllDB()">Select All</button>
             <button onclick="deselectAllDB()">Deselect All</button>
             <button class="tag-btn" onclick="reapplySelected()">Re-Apply Tags to Selected</button>
+            <button id="sortBtn" class="sort-btn" onclick="toggleSort()">Sort: A-Z ↓</button>
             <div class="db-status" id="dbStatus"></div>
         </div>
         <div class="list-container" id="dbList" style="background: #1e1e1e; border-radius: 8px; padding: 20px;">
@@ -125,6 +127,8 @@ HTML_PAGE = """
 
     <script>
         let currentPlexShow = null;
+        let cachedDbData = [];
+        let dbSortOrder = 'asc'; // Ascending by default
 
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -218,35 +222,56 @@ HTML_PAGE = """
         }
 
         function loadDatabase() {
-            // Forces browser to pull fresh data instead of using cached version
             fetch('/api/saved_matches?nocache=' + new Date().getTime())
                 .then(res => res.json())
                 .then(data => {
-                    const list = document.getElementById('dbList');
-                    list.innerHTML = '';
-                    if(data.length === 0) { list.innerHTML = '<p>No saved shows yet.</p>'; return; }
-                    
-                    data.forEach(item => {
-                        const div = document.createElement('div');
-                        div.className = 'db-item';
-                        let displayTitle = item.title ? item.title : `Unknown Title (Plex ID: ${item.plex_id})`;
-                        div.innerHTML = `
-                            <input type="checkbox" class="db-checkbox" value="${item.jellyfin_id}">
-                            <div class="jf-info">
-                                <strong>${displayTitle}</strong>
-                            </div>
-                            <button class="del-btn" onclick="deleteMatch('${item.plex_id}', '${item.jellyfin_id}', this)">Unlink & Remove</button>
-                        `;
-                        list.appendChild(div);
-                    });
-                    document.getElementById('dbStatus').innerText = `${data.length} matches in database`;
+                    cachedDbData = data; // Save to our local variable
+                    renderDatabase();    // Sort and render it
                 });
+        }
+
+        function toggleSort() {
+            dbSortOrder = (dbSortOrder === 'asc') ? 'desc' : 'asc';
+            document.getElementById('sortBtn').innerText = (dbSortOrder === 'asc') ? 'Sort: A-Z ↓' : 'Sort: Z-A ↑';
+            renderDatabase(); // Re-render instantly!
+        }
+
+        function renderDatabase() {
+            const list = document.getElementById('dbList');
+            list.innerHTML = '';
+            if(cachedDbData.length === 0) { list.innerHTML = '<p>No saved shows yet.</p>'; return; }
+            
+            // 1. Sort the data array based on the title
+            let sortedData = [...cachedDbData].sort((a, b) => {
+                let titleA = (a.title || `Unknown Title (Plex ID: ${a.plex_id})`).toLowerCase();
+                let titleB = (b.title || `Unknown Title (Plex ID: ${b.plex_id})`).toLowerCase();
+                
+                if(titleA < titleB) return dbSortOrder === 'asc' ? -1 : 1;
+                if(titleA > titleB) return dbSortOrder === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            // 2. Build the HTML list
+            sortedData.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'db-item';
+                let displayTitle = item.title ? item.title : `Unknown Title (Plex ID: ${item.plex_id})`;
+                div.innerHTML = `
+                    <input type="checkbox" class="db-checkbox" value="${item.jellyfin_id}">
+                    <div class="jf-info">
+                        <strong>${displayTitle}</strong>
+                    </div>
+                    <button class="del-btn" onclick="deleteMatch('${item.plex_id}', '${item.jellyfin_id}', this)">Unlink & Remove</button>
+                `;
+                list.appendChild(div);
+            });
+            
+            document.getElementById('dbStatus').innerText = `${sortedData.length} matches in database`;
         }
 
         async function deleteMatch(plexId, jellyfinId, buttonElement) {
             if(!confirm("Are you sure? This will remove the tag from Jellyfin and delete the link.")) return;
             
-            // Visual feedback while deleting
             const originalText = buttonElement.innerText;
             buttonElement.innerText = "Deleting...";
             buttonElement.style.background = "#555";
@@ -335,7 +360,6 @@ def index():
 def get_plex_shows():
     try:
         mapped_shows = load_mapped_shows()
-        # Convert to strings for consistent matching
         mapped_plex_ids = [str(m['plex_id']) for m in mapped_shows]
 
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
