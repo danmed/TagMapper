@@ -25,7 +25,6 @@ app = Flask(__name__)
 # --- DATABASE FUNCTIONS (Now Dynamic by Label!) ---
 def get_db_file(label):
     """Generates a safe filename based on the provided label."""
-    # Strip any weird characters out of the label just in case
     safe_label = "".join(c for c in label if c.isalnum())
     if not safe_label:
         safe_label = "default"
@@ -64,7 +63,6 @@ HTML_PAGE = """
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
         
-        /* New Label Bar Styles */
         .label-bar { display: flex; align-items: center; gap: 15px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #00a4dc; }
         .label-bar input { padding: 10px; border-radius: 4px; border: none; background: #2c2c2c; color: #fff; font-size: 16px; font-weight: bold; width: 250px;}
         .label-bar button { padding: 10px 20px; background: #00a4dc; color: #fff; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; }
@@ -78,8 +76,8 @@ HTML_PAGE = """
         
         .column { flex: 1; background: #1e1e1e; border-radius: 8px; padding: 20px; display: flex; flex-direction: column; overflow: hidden; }
         h2 { margin-top: 0; color: #e5a00d; }
-        .list-container { overflow-y: auto; flex: 1; }
-        .item { background: #2c2c2c; margin-bottom: 10px; padding: 15px; border-radius: 6px; cursor: pointer; transition: 0.2s; border: 2px solid transparent; }
+        .list-container { overflow-y: auto; flex: 1; color: #aaa; font-style: italic; }
+        .item { background: #2c2c2c; margin-bottom: 10px; padding: 15px; border-radius: 6px; cursor: pointer; transition: 0.2s; border: 2px solid transparent; color: #fff; font-style: normal; }
         .item:hover { background: #3d3d3d; }
         .item.active { border-color: #e5a00d; background: #3d3d3d; }
         
@@ -88,7 +86,7 @@ HTML_PAGE = """
         button.action-btn { padding: 10px 20px; background: #e5a00d; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; }
         button.action-btn:hover { background: #ffb822; }
         
-        .jf-result { display: flex; gap: 15px; background: #2c2c2c; padding: 15px; border-radius: 6px; margin-bottom: 10px; align-items: center; }
+        .jf-result { display: flex; gap: 15px; background: #2c2c2c; padding: 15px; border-radius: 6px; margin-bottom: 10px; align-items: center; color: #fff; font-style: normal; }
         .jf-result img { width: 50px; height: 75px; object-fit: cover; border-radius: 4px; background: #444; }
         .jf-info { flex: 1; }
         .tag-btn { background: #00a4dc; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
@@ -101,7 +99,7 @@ HTML_PAGE = """
         
         .success-msg { color: #4caf50; font-weight: bold; display: none; margin-bottom: 15px; }
 
-        .db-item { display: flex; align-items: center; gap: 15px; background: #2c2c2c; padding: 10px 15px; margin-bottom: 8px; border-radius: 6px; }
+        .db-item { display: flex; align-items: center; gap: 15px; background: #2c2c2c; padding: 10px 15px; margin-bottom: 8px; border-radius: 6px; color: #fff; font-style: normal; }
         .db-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
         .db-toolbar { display: flex; gap: 15px; margin-bottom: 15px; align-items: center; background: #1e1e1e; padding: 15px; border-radius: 8px;}
         .db-status { color: #aaa; margin-left: auto; font-style: italic; }
@@ -109,6 +107,7 @@ HTML_PAGE = """
 </head>
 <body>
 
+    <!-- GLOBAL LABEL BAR -->
     <div class="label-bar">
         <span><strong>Active Label:</strong></span>
         <input type="text" id="globalLabel" value="{{ default_label }}">
@@ -120,11 +119,12 @@ HTML_PAGE = """
         <button class="tab-btn" onclick="switchTab('database')" id="tab-database">2. Saved Database & Re-Apply</button>
     </div>
 
+    <!-- TAB 1: THE MAPPER -->
     <div id="mapper" class="tab-content active">
         <div class="column">
             <h2>Select Plex Show</h2>
-            <p>Pending shows in Plex with label: <strong id="displayLabel">{{ default_label }}</strong></p>
-            <div class="list-container" id="plexList">Loading...</div>
+            <p>Pending shows in Plex with label: <strong id="displayLabel">None Loaded</strong></p>
+            <div class="list-container" id="plexList">Enter a label and click 'Load Label Data' to begin.</div>
         </div>
         <div class="column">
             <h2>Match in Jellyfin</h2>
@@ -137,6 +137,7 @@ HTML_PAGE = """
         </div>
     </div>
 
+    <!-- TAB 2: THE DATABASE -->
     <div id="database" class="tab-content" style="flex-direction: column;">
         <div class="db-toolbar">
             <button class="action-btn" onclick="selectAllDB()">Select All</button>
@@ -146,7 +147,7 @@ HTML_PAGE = """
             <div class="db-status" id="dbStatus"></div>
         </div>
         <div class="list-container" id="dbList" style="background: #1e1e1e; border-radius: 8px; padding: 20px;">
-            Loading database...
+            Enter a label and click 'Load Label Data' to begin.
         </div>
     </div>
 
@@ -154,7 +155,8 @@ HTML_PAGE = """
         let currentPlexShow = null;
         let cachedDbData = [];
         let dbSortOrder = 'asc'; 
-        let activeTab = 'mapper'; // track state so changing labels refreshes the right screen
+        let activeTab = 'mapper'; 
+        let hasLoaded = false; // Prevents loading until the button is clicked!
 
         function getActiveLabel() {
             return document.getElementById('globalLabel').value.trim();
@@ -164,12 +166,12 @@ HTML_PAGE = """
             let label = getActiveLabel();
             if(!label) return alert("Label cannot be empty!");
             
+            hasLoaded = true; // Unlock the app!
             document.getElementById('displayLabel').innerText = label;
             document.getElementById('successMsg').style.display = 'none';
             document.getElementById('jfList').innerHTML = 'Select a Plex show first.';
             currentPlexShow = null;
 
-            // Reload whatever tab is currently open using the new label
             if (activeTab === 'mapper') {
                 loadPlexShows();
             } else {
@@ -184,12 +186,17 @@ HTML_PAGE = """
             document.getElementById(tabId).classList.add('active');
             document.getElementById('tab-' + tabId).classList.add('active');
             
-            if(tabId === 'database') loadDatabase();
-            if(tabId === 'mapper') loadPlexShows();
+            // Only try to load data if they have clicked the blue button at least once
+            if (hasLoaded) {
+                if(tabId === 'database') loadDatabase();
+                if(tabId === 'mapper') loadPlexShows();
+            }
         }
 
         function loadPlexShows() {
             let label = getActiveLabel();
+            document.getElementById('plexList').innerHTML = 'Loading from Plex...';
+            
             fetch(`/api/plex_shows?label=${encodeURIComponent(label)}`)
                 .then(res => res.json())
                 .then(data => {
@@ -278,6 +285,8 @@ HTML_PAGE = """
 
         function loadDatabase() {
             let label = getActiveLabel();
+            document.getElementById('dbList').innerHTML = 'Loading database...';
+            
             fetch(`/api/saved_matches?label=${encodeURIComponent(label)}&nocache=${new Date().getTime()}`)
                 .then(res => res.json())
                 .then(data => {
@@ -392,8 +401,7 @@ HTML_PAGE = """
             }
         }
 
-        // Initialize using the default label on page load
-        loadPlexShows();
+        // NOTE: We completely removed the loadPlexShows() auto-trigger here!
     </script>
 </body>
 </html>
@@ -424,7 +432,6 @@ def get_plex_shows():
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
         library = plex.library.section(PLEX_LIBRARY_NAME)
         
-        # We now search Plex specifically for the label passed from the browser
         shows = [s for s in library.all() if label in [l.tag for l in s.labels] and str(s.ratingKey) not in mapped_plex_ids]
         result = [{"id": str(s.ratingKey), "title": s.title, "year": s.year} for s in shows]
         return jsonify(result)
@@ -478,7 +485,6 @@ def apply_tag():
         item_data = detail_res.json()
         current_tags = item_data.get('Tags', [])
 
-        # Add the dynamically provided label to Jellyfin
         if label not in current_tags:
             current_tags.append(label)
             item_data['Tags'] = current_tags
@@ -521,7 +527,6 @@ def reapply_batch():
                 item_data = detail_res.json()
                 current_tags = item_data.get('Tags', [])
                 
-                # Re-apply the specific label sent from the frontend
                 if label not in current_tags:
                     current_tags.append(label)
                     item_data['Tags'] = current_tags
@@ -556,7 +561,6 @@ def delete_match():
             item_data = detail_res.json()
             current_tags = item_data.get('Tags', [])
             
-            # Remove the specific label from Jellyfin
             if label in current_tags:
                 current_tags.remove(label)
                 item_data['Tags'] = current_tags
@@ -565,7 +569,6 @@ def delete_match():
                 if update_res.status_code not in [200, 204]:
                     return jsonify({"error": f"Failed to untag in Jellyfin (Status {update_res.status_code})"}), 500
 
-        # Remove from the specific label's JSON file
         remove_mapped_show(plex_id, label)
         return jsonify({"success": True})
 
