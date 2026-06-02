@@ -423,4 +423,58 @@ def reapply_batch():
     for j_id in jellyfin_ids:
         try:
             detail_url = f"{JELLYFIN_URL}/Users/{JELLYFIN_USER_ID}/Items/{j_id}"
-            detail_res = requests.get(detail_url,
+            detail_res = requests.get(detail_url, headers=headers)
+            
+            if detail_res.status_code == 200:
+                item_data = detail_res.json()
+                current_tags = item_data.get('Tags', [])
+                
+                if TARGET_LABEL not in current_tags:
+                    current_tags.append(TARGET_LABEL)
+                    item_data['Tags'] = current_tags
+                    update_res = requests.post(f"{JELLYFIN_URL}/Items/{j_id}", headers=headers, json=item_data)
+                    if update_res.status_code in [200, 204]:
+                        success_count += 1
+                else:
+                    success_count += 1
+        except Exception as e:
+            print(f"Failed to reapply to {j_id}: {e}")
+            continue
+
+    return jsonify({"success": True, "count": success_count})
+
+@app.route('/api/delete_match', methods=['POST'])
+def delete_match():
+    data = request.json
+    jellyfin_id = data.get('jellyfin_id')
+    plex_id = data.get('plex_id')
+
+    if not jellyfin_id or not plex_id:
+        return jsonify({"error": "Missing IDs"}), 400
+
+    headers = get_jf_headers()
+
+    try:
+        detail_url = f"{JELLYFIN_URL}/Users/{JELLYFIN_USER_ID}/Items/{jellyfin_id}"
+        detail_res = requests.get(detail_url, headers=headers)
+        
+        if detail_res.status_code == 200:
+            item_data = detail_res.json()
+            current_tags = item_data.get('Tags', [])
+            
+            if TARGET_LABEL in current_tags:
+                current_tags.remove(TARGET_LABEL)
+                item_data['Tags'] = current_tags
+                
+                update_res = requests.post(f"{JELLYFIN_URL}/Items/{jellyfin_id}", headers=headers, json=item_data)
+                if update_res.status_code not in [200, 204]:
+                    return jsonify({"error": f"Failed to untag in Jellyfin (Status {update_res.status_code})"}), 500
+
+        remove_mapped_show(plex_id)
+        return jsonify({"success": True})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', debug=True, port=5000)
