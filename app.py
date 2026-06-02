@@ -86,7 +86,7 @@ HTML_PAGE = """
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
         
         .label-bar { display: flex; align-items: center; gap: 15px; background: #1e1e1e; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #00a4dc; }
-        .label-bar input { padding: 10px; border-radius: 4px; border: none; background: #2c2c2c; color: #fff; font-size: 16px; font-weight: bold; width: 250px;}
+        .label-bar select { padding: 10px; border-radius: 4px; border: none; background: #2c2c2c; color: #fff; font-size: 16px; font-weight: bold; width: 250px; cursor: pointer;}
         .label-bar button { padding: 10px 20px; background: #00a4dc; color: #fff; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px; }
         .label-bar button:hover { background: #00bfff; }
 
@@ -131,9 +131,8 @@ HTML_PAGE = """
 
     <div class="label-bar">
         <span><strong>Active Label:</strong></span>
-        <input type="text" id="globalLabel" value="{{ default_label }}" list="knownLabelsList" placeholder="Select or type a label..." autocomplete="off">
-        <datalist id="knownLabelsList"></datalist>
-        <button onclick="changeLabel()">Load Label Data</button>
+        <select id="globalLabel" onchange="changeLabel()"></select>
+        <button onclick="createNewHtmlLabel()" style="background: #444;">+ New Label</button>
     </div>
 
     <div class="tabs">
@@ -145,7 +144,7 @@ HTML_PAGE = """
         <div class="column">
             <h2>Select Plex Show</h2>
             <p>Pending shows in Plex with label: <strong id="displayLabel">None Loaded</strong></p>
-            <div class="list-container" id="plexList">Enter a label and click 'Load Label Data' to begin.</div>
+            <div class="list-container" id="plexList">Loading...</div>
         </div>
         <div class="column">
             <h2>Match in Jellyfin</h2>
@@ -170,7 +169,7 @@ HTML_PAGE = """
             <div class="db-status" id="dbStatus"></div>
         </div>
         <div class="list-container" id="dbList" style="background: #1e1e1e; border-radius: 8px; padding: 20px;">
-            Enter a label and click 'Load Label Data' to begin.
+            Select a label to view its saved database.
         </div>
     </div>
 
@@ -181,29 +180,55 @@ HTML_PAGE = """
         let activeTab = 'mapper'; 
         let hasLoaded = false; 
 
-        // Fetch known labels on page load
-        function loadKnownLabels() {
+        // Fetch known labels on page load and populate the dropdown menu
+        function loadKnownLabels(targetSelectValue = null) {
             fetch('/api/known_labels')
                 .then(res => res.json())
                 .then(labels => {
-                    const dataList = document.getElementById('knownLabelsList');
-                    dataList.innerHTML = ''; // Clear old options
+                    const select = document.getElementById('globalLabel');
+                    // Remember selection, fallback to target, or fallback to default environment variable
+                    const currentSelection = targetSelectValue || select.value || "{{ default_label }}";
+                    
+                    select.innerHTML = ''; 
                     labels.forEach(label => {
                         let option = document.createElement('option');
                         option.value = label;
-                        dataList.appendChild(option);
+                        option.innerText = label;
+                        if (label === currentSelection) option.selected = true;
+                        select.appendChild(option);
                     });
+                    
+                    // Run the initial data pull if this is the first browser load
+                    if (!hasLoaded) {
+                        changeLabel();
+                    }
                 })
                 .catch(err => console.error("Error loading known labels:", err));
         }
 
+        // Action when "+ New Label" is clicked
+        function createNewHtmlLabel() {
+            let newLabel = prompt("Enter new label name (Letters and numbers only):");
+            if (!newLabel) return;
+            
+            // Clean it up to strip out characters that mess up file systems
+            newLabel = newLabel.replace(/[^a-zA-Z0-9]/g, ""); 
+            if (!newLabel) return alert("Invalid label name!");
+            
+            // Reload the dropdown lists, forcing the new label to be selected
+            loadKnownLabels(newLabel);
+            
+            // Give the DOM a millisecond to catch up, then load the data view
+            setTimeout(() => changeLabel(), 50);
+        }
+
         function getActiveLabel() {
-            return document.getElementById('globalLabel').value.trim();
+            return document.getElementById('globalLabel').value;
         }
 
         function changeLabel() {
             let label = getActiveLabel();
-            if(!label) return alert("Label cannot be empty!");
+            if(!label) return;
             
             hasLoaded = true; 
             document.getElementById('displayLabel').innerText = label;
@@ -216,9 +241,6 @@ HTML_PAGE = """
             } else {
                 loadDatabase();
             }
-            
-            // Refresh the datalist in case a new label was just created
-            loadKnownLabels();
         }
 
         function switchTab(tabId) {
@@ -318,6 +340,8 @@ HTML_PAGE = """
                     document.getElementById('jfList').innerHTML = '';
                     document.getElementById(`plex-${currentPlexShow.id}`).remove();
                     currentPlexShow = null;
+                    // Refresh known labels list to make sure the menu includes this database file
+                    loadKnownLabels();
                 } else {
                     alert("Error: " + data.error);
                 }
@@ -392,6 +416,7 @@ HTML_PAGE = """
                 
                 if(result.success) {
                     loadDatabase(); 
+                    loadKnownLabels(); // Update lists in case a label database was wiped empty
                 } else {
                     alert("Error: " + result.error);
                     buttonElement.innerText = originalText;
@@ -464,8 +489,8 @@ HTML_PAGE = """
             setTimeout(() => deselectAllDB(), 1500);
         }
 
-        // Initialize the combobox on startup
-        document.addEventListener('DOMContentLoaded', loadKnownLabels);
+        // Initialize on window load
+        document.addEventListener('DOMContentLoaded', () => loadKnownLabels());
     </script>
 </body>
 </html>
@@ -485,7 +510,7 @@ def get_jf_headers():
 def index():
     return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL)
 
-# NEW ROUTE: Find all existing databases
+# LOOKS INTO THE DATA FLODER FOR JSON DATABASES
 @app.route('/api/known_labels')
 @requires_auth
 def get_known_labels():
@@ -493,15 +518,11 @@ def get_known_labels():
     if os.path.exists(DATA_DIR):
         for filename in os.listdir(DATA_DIR):
             if filename.endswith("_mapped_shows.json"):
-                # Strip the suffix to get the raw label name
                 label = filename.replace("_mapped_shows.json", "")
                 if label and label != "default":
                     labels.add(label)
                     
-    # Always include the default from docker-compose so the user has a starting point
     labels.add(DEFAULT_LABEL)
-    
-    # Return them sorted alphabetically
     return jsonify(sorted(list(labels)))
 
 @app.route('/api/plex_shows')
