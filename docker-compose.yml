@@ -11,6 +11,8 @@ services:
       - ./data:/data
     environment:
       # Users will put THEIR keys here when they download your app
+      - APP_USERNAME=admin
+      - APP_PASSWORD=password123
       - PLEX_URL=http://192.168.2.203:32400
       - PLEX_TOKEN=xxxxxxxxxxxxxxxxxxxxxxx
       - PLEX_LIBRARY_NAME=TV
