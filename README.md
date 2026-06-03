@@ -21,8 +21,8 @@ The `docker-compose.yml` file is not included in the repository to prevent accid
 
 ### 1. Clone the Repository
 ```bash
-git clone [https://github.com/YOUR_USERNAME/plex-jellyfin-mapper.git](https://github.com/YOUR_USERNAME/plex-jellyfin-mapper.git)
-cd plex-jellyfin-mapper
+git clone https://github.com/danmed/TagMapper.git
+cd EagMapper
 ```
 
 ### 2. Create the Configuration File
@@ -51,12 +51,12 @@ services:
       - APP_PASSWORD=your_secure_password_here
 
       # Plex Settings
-      - PLEX_URL=[http://192.168.1.100:32400](http://192.168.1.100:32400)
+      - PLEX_URL=http://192.168.1.100:3240)
       - PLEX_TOKEN=your_plex_token_here
       - PLEX_LIBRARY_NAME=TV
 
       # Jellyfin Settings
-      - JELLYFIN_URL=[http://192.168.1.100:8096](http://192.168.1.100:8096)
+      - JELLYFIN_URL=http://192.168.1.100:8096
       - JELLYFIN_API_KEY=your_jellyfin_admin_api_key
       - JELLYFIN_USER_ID=your_jellyfin_admin_user_id
 
