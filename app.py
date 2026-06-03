@@ -207,7 +207,7 @@ HTML_PAGE = """
         }
 
         // Action when "+ New Label" is clicked
-        function createNewHtmlLabel() {
+        async function createNewHtmlLabel() {
             let newLabel = prompt("Enter new label name (Letters and numbers only):");
             if (!newLabel) return;
             
@@ -215,11 +215,22 @@ HTML_PAGE = """
             newLabel = newLabel.replace(/[^a-zA-Z0-9]/g, ""); 
             if (!newLabel) return alert("Invalid label name!");
             
-            // Reload the dropdown lists, forcing the new label to be selected
-            loadKnownLabels(newLabel);
-            
-            // Give the DOM a millisecond to catch up, then load the data view
-            setTimeout(() => changeLabel(), 50);
+            try {
+                // Permanently lock this label into the database folder immediately!
+                await fetch('/api/create_label', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label: newLabel })
+                });
+
+                // Reload the dropdown lists, forcing the new label to be selected
+                loadKnownLabels(newLabel);
+                
+                // Give the DOM a millisecond to catch up, then load the data view
+                setTimeout(() => changeLabel(), 50);
+            } catch (err) {
+                alert("Failed to create label database.");
+            }
         }
 
         function getActiveLabel() {
@@ -341,7 +352,7 @@ HTML_PAGE = """
                     document.getElementById(`plex-${currentPlexShow.id}`).remove();
                     currentPlexShow = null;
                     // Refresh known labels list to make sure the menu includes this database file
-                    loadKnownLabels();
+                    loadKnownLabels(label);
                 } else {
                     alert("Error: " + data.error);
                 }
@@ -416,7 +427,7 @@ HTML_PAGE = """
                 
                 if(result.success) {
                     loadDatabase(); 
-                    loadKnownLabels(); // Update lists in case a label database was wiped empty
+                    loadKnownLabels(label); 
                 } else {
                     alert("Error: " + result.error);
                     buttonElement.innerText = originalText;
@@ -525,6 +536,20 @@ def get_known_labels():
     labels.add(DEFAULT_LABEL)
     return jsonify(sorted(list(labels)))
 
+# NEW ROUTE: Instantly creates a blank database file so a new label is permanently saved
+@app.route('/api/create_label', methods=['POST'])
+@requires_auth
+def create_label():
+    label = request.json.get('label')
+    if not label: return jsonify({"error": "Missing label"}), 400
+    
+    db_file = get_db_file(label)
+    if not os.path.exists(db_file):
+        with open(db_file, 'w') as f:
+            json.dump([], f)
+            
+    return jsonify({"success": True})
+
 @app.route('/api/plex_shows')
 @requires_auth
 def get_plex_shows():
@@ -539,10 +564,8 @@ def get_plex_shows():
         library = plex.library.section(PLEX_LIBRARY_NAME)
         
         # --- THE SPEED FIX ---
-        # Instead of downloading the whole library, we ask Plex to filter it before sending!
         matching_shows = library.search(label=label)
         
-        # Now we just remove the ones we've already mapped
         shows = [s for s in matching_shows if str(s.ratingKey) not in mapped_plex_ids]
         
         result = [{"id": str(s.ratingKey), "title": s.title, "year": s.year} for s in shows]
