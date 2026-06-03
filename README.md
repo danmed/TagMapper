@@ -1,25 +1,44 @@
-# Plex to Jellyfin Mapper 🎬
+# TagMapper
 
-A lightweight, Dockerized web app that helps you synchronize specific tags/labels from Plex over to Jellyfin. 
+A Dockerized web app that synchronizes specific tags and labels from Plex to a Jellyfin server. 
 
-If you use Plex to manage specific labels (like "Kids", "Anime", or "LauraTV") and want to easily apply those same tags to your Jellyfin library, this tool gives you a clean GUI to link them up, save them to a local database, and batch re-apply them whenever Jellyfin overwrites its metadata.
+If you use Plex to manage metadata tags (like "Kids" or "Anime") and want to apply those same tags to your Jellyfin library, this tool provides a local web interface to link the items, save them to a database, and keep them synced.
 
 ## Features
-* 🔍 **Native Search:** Lightning-fast Jellyfin API integration.
-* 💾 **Persistent Database:** Remembers what you've linked so you don't have to do it twice.
-* 🏷️ **Multi-Label Support:** Type in any label context and manage different databases seamlessly.
-* 🔄 **Batch Re-Apply:** One-click re-application of tags if a Jellyfin metadata refresh wipes them out.
+
+* **Multi-Label Support:** Create and manage separate JSON databases based on different labels. Switch between them using the dropdown menu.
+* **Background Sync:** A background thread runs every 12 hours to verify the databases and re-apply tags to Jellyfin, protecting against metadata refreshes.
+* **Batch Re-Apply:** Includes a batch tagging tool with a progress bar that processes items sequentially to prevent browser freezing.
+* **Database Cleanup:** A "Clean Dead Links" tool scans the server and removes database entries for shows that no longer exist on Jellyfin.
+* **Security:** The web interface and backend API are protected by HTTP Basic Authentication.
+* **Optimized Search:** Uses server-side filtering on the Plex API to load pending lists quickly, even with large libraries.
+
+---
 
 ## Installation (Docker)
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/danmed/TagMapper.git
-   cd TagMapper
-2. Create docker-compose.yml
-   ```yaml
-   services:
-   plex-mapper:
+The `docker-compose.yml` file is not included in the repository to prevent accidental credential commits. You will need to create it locally.
+
+### 1. Clone the Repository
+```bash
+git clone [https://github.com/YOUR_USERNAME/plex-jellyfin-mapper.git](https://github.com/YOUR_USERNAME/plex-jellyfin-mapper.git)
+cd plex-jellyfin-mapper
+```
+
+### 2. Create the Configuration File
+Create a new compose file on your server:
+```bash
+nano docker-compose.yml
+```
+
+### 3. Edit the Configuration
+Copy the template below into your file. Replace the placeholder IP addresses, API Tokens, and passwords with your details:
+
+```yaml
+version: '3.8'
+
+services:
+  plex-mapper:
     build: .
     container_name: plex-jellyfin-mapper
     ports:
@@ -27,20 +46,46 @@ If you use Plex to manage specific labels (like "Kids", "Anime", or "LauraTV") a
     volumes:
       - ./data:/data
     environment:
+      # Security Settings
       - APP_USERNAME=admin
-      - APP_PASSWORD=password123
-      - PLEX_URL=http://192.168.2.203:32400
+      - APP_PASSWORD=your_secure_password_here
+
+      # Plex Settings
+      - PLEX_URL=[http://192.168.1.100:32400](http://192.168.1.100:32400)
       - PLEX_TOKEN=your_plex_token_here
       - PLEX_LIBRARY_NAME=TV
-      - JELLYFIN_URL=http://192.168.2.202:8096
-      - JELLYFIN_API_KEY=your_jellyfin_api_key_here
-      - JELLYFIN_USER_ID=your_jellyfin_admin_user_id
-      - TARGET_LABEL=LauraTV
-    restart: unless-stopped
-3. Build Docker Container
-   ```bash
-   docker compose up -d --build
 
-## Screenshots
-<img width="2306" height="888" alt="image" src="https://github.com/user-attachments/assets/56f566be-0e2e-4bd9-b038-e142e707e695" />
-<img width="2285" height="825" alt="image" src="https://github.com/user-attachments/assets/8382e4bc-38b8-48a9-ab76-01ceeae3aa4a" />
+      # Jellyfin Settings
+      - JELLYFIN_URL=[http://192.168.1.100:8096](http://192.168.1.100:8096)
+      - JELLYFIN_API_KEY=your_jellyfin_admin_api_key
+      - JELLYFIN_USER_ID=your_jellyfin_admin_user_id
+
+      # App Settings
+      - TARGET_LABEL=DefaultLabel
+      - SYNC_INTERVAL_HOURS=12
+    restart: unless-stopped
+```
+
+### 4. Build and Launch
+Build the Docker image and start the container:
+```bash
+docker compose up -d --build
+```
+
+### 5. Access the Web App
+Open a web browser and navigate to `http://<your-server-ip>:5000`. Log in using the `APP_USERNAME` and `APP_PASSWORD` defined in your compose file.
+
+---
+
+## Usage Notes
+
+* **Creating a New Label:** Click the "+ New Label" button to create a new database file. It will be added to the dropdown menu automatically.
+* **Finding the Jellyfin User ID:** The User ID is located in the Jellyfin web interface URL when viewing a user profile in the Admin Dashboard. This must be an Admin user for the tagging API to function.
+* **Updating the App:** To pull the latest code without overwriting your compose file, temporarily rename it:
+```bash
+  mv docker-compose.yml compose-backup.yml
+  git pull
+  mv compose-backup.yml docker-compose.yml
+  docker compose up -d --build
+  docker image prune -f
+  ```
