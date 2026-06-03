@@ -1,6 +1,8 @@
 import requests
 import json
 import os
+import time
+import threading
 from functools import wraps
 from flask import Flask, jsonify, request, render_template_string, Response
 from plexapi.server import PlexServer
@@ -16,6 +18,7 @@ JELLYFIN_USER_ID = os.getenv('JELLYFIN_USER_ID', 'YOUR_ADMIN_ID')
 
 DATA_DIR = os.getenv('DATA_DIR', '/data')
 DEFAULT_LABEL = os.getenv('TARGET_LABEL', 'LauraTV')
+SYNC_INTERVAL_HOURS = int(os.getenv('SYNC_INTERVAL_HOURS', '12')) # Background sync frequency
 
 # --- SECURITY CREDENTIALS ---
 APP_USERNAME = os.getenv('APP_USERNAME', 'admin')
@@ -23,6 +26,56 @@ APP_PASSWORD = os.getenv('APP_PASSWORD', 'password123')
 # -------------------------------------
 
 app = Flask(__name__)
+
+# --- BACKGROUND AUTO-PILOT TASK ---
+def auto_pilot_sync():
+    """Runs continuously in the background, checking all databases every X hours."""
+    while True:
+        # Sleep first so it doesn't instantly slam the API on container boot
+        time.sleep(SYNC_INTERVAL_HOURS * 3600) 
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running Auto-Pilot Background Sync...")
+        
+        try:
+            if not os.path.exists(DATA_DIR): continue
+            
+            headers = {
+                'X-MediaBrowser-Token': JELLYFIN_API_KEY, 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
+            # Loop through every label database we have
+            for filename in os.listdir(DATA_DIR):
+                if filename.endswith("_mapped_shows.json"):
+                    label = filename.replace("_mapped_shows.json", "")
+                    if not label or label == "default": continue
+                    
+                    db_path = os.path.join(DATA_DIR, filename)
+                    with open(db_path, 'r') as f:
+                        try:
+                            matches = json.load(f)
+                        except:
+                            continue
+                            
+                    # Re-apply the specific label to every item in the database
+                    for match in matches:
+                        j_id = match.get('jellyfin_id')
+                        if not j_id: continue
+                        
+                        detail_url = f"{JELLYFIN_URL}/Users/{JELLYFIN_USER_ID}/Items/{j_id}"
+                        res = requests.get(detail_url, headers=headers)
+                        
+                        if res.status_code == 200:
+                            item_data = res.json()
+                            tags = item_data.get('Tags', [])
+                            if label not in tags:
+                                tags.append(label)
+                                item_data['Tags'] = tags
+                                requests.post(f"{JELLYFIN_URL}/Items/{j_id}", headers=headers, json=item_data)
+                                
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Auto-Pilot Sync Complete.")
+        except Exception as e:
+            print(f"Auto-Pilot Sync Error: {e}")
 
 # --- AUTHENTICATION LOGIC ---
 def check_auth(username, password):
@@ -114,7 +167,7 @@ HTML_PAGE = """
         .tag-btn { background: #00a4dc; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
         .tag-btn:hover { background: #00bfff; }
         
-        .del-btn { background: #d32f2f; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
+        .del-btn { background: #d32f2f; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-left: auto;}
         .del-btn:hover { background: #f44336; }
         .sort-btn { background: #444; color: #fff; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
         .sort-btn:hover { background: #555; }
@@ -123,6 +176,7 @@ HTML_PAGE = """
 
         .db-item { display: flex; align-items: center; gap: 15px; background: #2c2c2c; padding: 10px 15px; margin-bottom: 8px; border-radius: 6px; color: #fff; font-style: normal; }
         .db-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
+        .db-item img { width: 50px; height: 75px; object-fit: cover; border-radius: 4px; background: #444; }
         .db-toolbar { display: flex; gap: 15px; margin-bottom: 15px; align-items: center; background: #1e1e1e; padding: 15px; border-radius: 8px;}
         .db-status { color: #aaa; margin-left: auto; font-style: italic; }
     </style>
@@ -162,6 +216,9 @@ HTML_PAGE = """
             <button class="action-btn" onclick="selectAllDB()">Select All</button>
             <button class="action-btn" onclick="deselectAllDB()">Deselect All</button>
             <button class="tag-btn" id="reapplyBtn" onclick="reapplySelected()">Re-Apply Tags to Selected</button>
+            
+            <button class="action-btn" id="cleanBtn" onclick="cleanupDatabase()" style="background: #8b5cf6; color: white;">🧹 Clean Dead Links</button>
+            
             <button id="sortBtn" class="sort-btn" onclick="toggleSort()">Sort: A-Z ↓</button>
             
             <progress id="reapplyProgress" value="0" max="100" style="display: none; margin-left: auto; width: 150px; accent-color: #e5a00d;"></progress>
@@ -179,14 +236,15 @@ HTML_PAGE = """
         let dbSortOrder = 'asc'; 
         let activeTab = 'mapper'; 
         let hasLoaded = false; 
+        
+        // We pass the Jellyfin URL from Python to Javascript so it can load the images!
+        const jfUrl = "{{ jellyfin_url }}";
 
-        // Fetch known labels on page load and populate the dropdown menu
         function loadKnownLabels(targetSelectValue = null) {
             fetch('/api/known_labels')
                 .then(res => res.json())
                 .then(labels => {
                     const select = document.getElementById('globalLabel');
-                    // Remember selection, fallback to target, or fallback to default environment variable
                     const currentSelection = targetSelectValue || select.value || "{{ default_label }}";
                     
                     select.innerHTML = ''; 
@@ -198,7 +256,6 @@ HTML_PAGE = """
                         select.appendChild(option);
                     });
                     
-                    // Run the initial data pull if this is the first browser load
                     if (!hasLoaded) {
                         changeLabel();
                     }
@@ -206,27 +263,21 @@ HTML_PAGE = """
                 .catch(err => console.error("Error loading known labels:", err));
         }
 
-        // Action when "+ New Label" is clicked
         async function createNewHtmlLabel() {
             let newLabel = prompt("Enter new label name (Letters and numbers only):");
             if (!newLabel) return;
             
-            // Clean it up to strip out characters that mess up file systems
             newLabel = newLabel.replace(/[^a-zA-Z0-9]/g, ""); 
             if (!newLabel) return alert("Invalid label name!");
             
             try {
-                // Permanently lock this label into the database folder immediately!
                 await fetch('/api/create_label', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ label: newLabel })
                 });
 
-                // Reload the dropdown lists, forcing the new label to be selected
                 loadKnownLabels(newLabel);
-                
-                // Give the DOM a millisecond to catch up, then load the data view
                 setTimeout(() => changeLabel(), 50);
             } catch (err) {
                 alert("Failed to create label database.");
@@ -351,7 +402,6 @@ HTML_PAGE = """
                     document.getElementById('jfList').innerHTML = '';
                     document.getElementById(`plex-${currentPlexShow.id}`).remove();
                     currentPlexShow = null;
-                    // Refresh known labels list to make sure the menu includes this database file
                     loadKnownLabels(label);
                 } else {
                     alert("Error: " + data.error);
@@ -391,12 +441,16 @@ HTML_PAGE = """
                 return 0;
             });
 
+            // UPDATED: Now displays the Jellyfin poster next to each saved item!
             sortedData.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'db-item';
                 let displayTitle = item.title ? item.title : `Unknown Title (Plex ID: ${item.plex_id})`;
+                let imgUrl = `${jfUrl}/Items/${item.jellyfin_id}/Images/Primary?fillHeight=75&fillWidth=50&quality=80`;
+                
                 div.innerHTML = `
                     <input type="checkbox" class="db-checkbox" value="${item.jellyfin_id}">
+                    <img src="${imgUrl}" alt="poster" onerror="this.src='https://via.placeholder.com/50x75?text=No+Img'">
                     <div class="jf-info">
                         <strong>${displayTitle}</strong>
                     </div>
@@ -406,6 +460,41 @@ HTML_PAGE = """
             });
             
             document.getElementById('dbStatus').innerText = `${sortedData.length} matches in database`;
+        }
+
+        // NEW FEATURE: Health Check / Database Cleanup
+        async function cleanupDatabase() {
+            let label = getActiveLabel();
+            if(!label) return;
+            if(!confirm("This will scan Jellyfin and automatically remove any saved matches that have been deleted from your server. Continue?")) return;
+            
+            const cleanBtn = document.getElementById('cleanBtn');
+            const originalText = cleanBtn.innerText;
+            cleanBtn.innerText = "Scanning Server...";
+            cleanBtn.style.background = "#555";
+            cleanBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/cleanup_database', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label: label })
+                });
+                const result = await response.json();
+                
+                if(result.success) {
+                    alert(`Cleanup complete! Removed ${result.removed} dead links from the database.`);
+                    loadDatabase();
+                } else {
+                    alert("Error: " + result.error);
+                }
+            } catch (err) {
+                alert("Connection error.");
+            }
+            
+            cleanBtn.innerText = originalText;
+            cleanBtn.style.background = "#8b5cf6";
+            cleanBtn.disabled = false;
         }
 
         async function deleteMatch(plexId, jellyfinId, buttonElement) {
@@ -500,14 +589,13 @@ HTML_PAGE = """
             setTimeout(() => deselectAllDB(), 1500);
         }
 
-        // Initialize on window load
         document.addEventListener('DOMContentLoaded', () => loadKnownLabels());
     </script>
 </body>
 </html>
 """
 
-# --- BACKEND API ROUTES (LOCKED DOWN) ---
+# --- BACKEND API ROUTES ---
 
 def get_jf_headers():
     return {
@@ -519,9 +607,9 @@ def get_jf_headers():
 @app.route('/')
 @requires_auth
 def index():
-    return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL)
+    # Pass jellyfin_url into the HTML so the JS knows where to load images from
+    return render_template_string(HTML_PAGE, default_label=DEFAULT_LABEL, jellyfin_url=JELLYFIN_URL)
 
-# LOOKS INTO THE DATA FOLDER FOR JSON DATABASES
 @app.route('/api/known_labels')
 @requires_auth
 def get_known_labels():
@@ -536,7 +624,6 @@ def get_known_labels():
     labels.add(DEFAULT_LABEL)
     return jsonify(sorted(list(labels)))
 
-# NEW ROUTE: Instantly creates a blank database file so a new label is permanently saved
 @app.route('/api/create_label', methods=['POST'])
 @requires_auth
 def create_label():
@@ -563,9 +650,7 @@ def get_plex_shows():
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
         library = plex.library.section(PLEX_LIBRARY_NAME)
         
-        # --- THE SPEED FIX ---
         matching_shows = library.search(label=label)
-        
         shows = [s for s in matching_shows if str(s.ratingKey) not in mapped_plex_ids]
         
         result = [{"id": str(s.ratingKey), "title": s.title, "year": s.year} for s in shows]
@@ -675,10 +760,41 @@ def reapply_batch():
                 else:
                     success_count += 1
         except Exception as e:
-            print(f"Failed to reapply to {j_id}: {e}")
             continue
 
     return jsonify({"success": True, "count": success_count})
+
+# NEW ROUTE: Database Health Cleanup
+@app.route('/api/cleanup_database', methods=['POST'])
+@requires_auth
+def cleanup_database():
+    label = request.json.get('label')
+    if not label: return jsonify({"error": "Missing label"}), 400
+    
+    mapped_shows = load_mapped_shows(label)
+    valid_shows = []
+    removed_count = 0
+    headers = get_jf_headers()
+    
+    for item in mapped_shows:
+        j_id = item.get('jellyfin_id')
+        if not j_id: continue
+        
+        # Check if the item actually exists in Jellyfin
+        detail_url = f"{JELLYFIN_URL}/Users/{JELLYFIN_USER_ID}/Items/{j_id}"
+        res = requests.get(detail_url, headers=headers)
+        
+        if res.status_code == 404:
+            removed_count += 1 # It's dead, let it go
+        else:
+            valid_shows.append(item) # It's still alive, keep it
+            
+    # If we found dead links, overwrite the JSON file with the clean list
+    if removed_count > 0:
+        with open(get_db_file(label), 'w') as f:
+            json.dump(valid_shows, f, indent=4)
+            
+    return jsonify({"success": True, "removed": removed_count})
 
 @app.route('/api/delete_match', methods=['POST'])
 @requires_auth
@@ -716,4 +832,8 @@ def delete_match():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
+    # Start the Auto-Pilot background thread right before the server starts
+    bg_thread = threading.Thread(target=auto_pilot_sync, daemon=True)
+    bg_thread.start()
+    
     app.run(host='0.0.0.0', debug=True, port=5000)
